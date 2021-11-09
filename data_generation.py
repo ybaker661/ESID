@@ -3,9 +3,9 @@ import pandas as pd
 from utils import data_generator
 
 ## data dimension
-N_train = 1 
+N_train = 2
 dim = 288
-hidden_dim = 1
+hidden_dim = 2
 output_dim = 288
 
 ## initialize parameters

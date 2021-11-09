@@ -75,10 +75,6 @@ class OptLayer(nn.Module):
 
 class PolytopeProjection(nn.Module):
     def __init__(self, T):
-        super().__init__()
-        # param: alpha - discomfort utility
-        # param: N - upperbound
-        # param: M - lowerbound
         self.c1 = nn.Parameter(20*torch.ones(1))
         self.c2 = nn.Parameter(120*torch.ones(1))
         self.P1 = nn.Parameter(0.5/12*torch.ones(1))
@@ -91,12 +87,6 @@ class PolytopeProjection(nn.Module):
         obj = (lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: -price@(d-p)+c1*cp.sum(d)+cp.sum_squares(cp.sqrt(c2)*d)
                         if isinstance(d, cp.Variable) else -price@(d-p)+c1*torch.sum(d)+c2*torch.sum(d**2))
         
-        # ineq1 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: p-torch.ones(T, dtype=torch.double)*0.5/12
-        # ineq2 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: torch.ones(T, dtype=torch.double)*0-p
-        # ineq3 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: d-torch.ones(T, dtype=torch.double)*0.5/12
-        # ineq4 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: torch.ones(T, dtype=torch.double)*0-d
-        # ineq5 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: torch.tril(torch.ones(T, T, dtype=torch.double))@(0.9*p-d/0.9)-torch.ones(T, dtype=torch.double)*(1-0.5)
-        # ineq6 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: torch.ones(T, dtype=torch.double)*(0-0.5)-torch.tril(torch.ones(T, T, dtype=torch.double))@(0.9*p-d/0.9)
         ineq1 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: p-torch.ones(T, dtype=torch.double)*0.5/12
         ineq2 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: torch.ones(T, dtype=torch.double)*0-p
         ineq3 = lambda d, p, price, c1, c2, P1, P2, E1, E2, e0, eta: d-torch.ones(T, dtype=torch.double)*0.5/12
@@ -117,39 +107,30 @@ class PolytopeProjection(nn.Module):
                           self.e0.expand(price.shape[0], *self.e0.shape),
                           self.eta.expand(price.shape[0], *self.eta.shape))
 
-# class PolytopeProjectionSingle(nn.Module):
-    # def __init__(self, T):
-    #     super().__init__()
-    #     # param: alpha - discomfort utility
-    #     # param: N - upperbound
-    #     # param: M - lowerbound
-    #     self.c1 = nn.Parameter(50*torch.ones(1))
-    #     self.c2 = nn.Parameter(150*torch.ones(1))
-    #     self.P = nn.Parameter(0.5/12*torch.ones(1))
-    #     self.E1 = nn.Parameter(1*torch.ones(1))
-    #     self.E2 = nn.Parameter(0*torch.ones(1))
-    #     self.e0 = nn.Parameter(0.5*torch.ones(1))
-    #     self.eta = nn.Parameter(0.9*torch.ones(1))
+class PolytopeProjectionETA(nn.Module):
+    def __init__(self, P1, P2, E1, E2, eta, T):
+        super().__init__()
+        super().__init__()
+        self.c1 = nn.Parameter(10*torch.ones(1))
+        self.c2 = nn.Parameter(100*torch.ones(1))
         
-    #     obj = (lambda d, price, c1, c2, P, E1, E2, e0, eta: -price@d+c1*cp.sum(cp.maximum(0,d))+cp.sum_squares(cp.sqrt(c2)*cp.maximum(0,d))
-    #                     if isinstance(d, cp.Variable) else -price@d+c1*torch.sum(torch.maximum(0,d))+c2*torch.sum(torch.maximum(0,d)**2))
+        obj = (lambda d, p, price, c1, c2: -price@(d-p)+c1*cp.sum(d)+cp.sum_squares(cp.sqrt(c2)*d)
+                        if isinstance(d, cp.Variable) else -price@(d-p)+c1*torch.sum(d)+c2*torch.sum(d**2))
         
-    #     ineq1 = lambda d, price, c1, c2, P, E1, E2, e0, eta: d-torch.ones(T, dtype=torch.double)*P
-    #     ineq2 = lambda d, price, c1, c2, P, E1, E2, e0, eta: -torch.ones(T, dtype=torch.double)*P-d
-    #     ineq3 = lambda d, price, c1, c2, P, E1, E2, e0, eta: torch.tril(torch.ones(T, T, dtype=torch.double))@(eta*cp.maximum(0,-d)-cp.maximum(0,d)/eta)-torch.ones(T, dtype=torch.double)*(1-0.5)
-    #     ineq4 = lambda d, price, c1, c2, P, E1, E2, e0, eta: torch.ones(T, dtype=torch.double)*(0-0.5)-torch.tril(torch.ones(T, T, dtype=torch.double))@(eta*cp.maximum(0,-d)-cp.maximum(0,d)/eta)
+        ineq1 = lambda d, p, price, c1, c2: p-torch.ones(T, dtype=torch.double)*P1
+        ineq2 = lambda d, p, price, c1, c2: torch.ones(T, dtype=torch.double)*0-p
+        ineq3 = lambda d, p, price, c1, c2: d-torch.ones(T, dtype=torch.double)*P2
+        ineq4 = lambda d, p, price, c1, c2: torch.ones(T, dtype=torch.double)*0-d
+        ineq5 = lambda d, p, price, c1, c2: torch.tril(torch.ones(T, T, dtype=torch.double))@(eta*p-d/eta)-torch.ones(T, dtype=torch.double)*E1
+        ineq6 = lambda d, p, price, c1, c2: torch.ones(T, dtype=torch.double)*E2-torch.tril(torch.ones(T, T, dtype=torch.double))@(eta*p-d/eta)
 
-    #     self.layer = OptLayer([cp.Variable(T)], [cp.Parameter(T,), cp.Parameter(1), cp.Parameter(1), cp.Parameter(1), cp.Parameter(1), cp.Parameter(1), cp.Parameter(1), cp.Parameter(1)],
-    #                           obj, [ineq1, ineq2, ineq3, ineq4], [], solver = "GUROBI", verbose=False)
+        self.layer = OptLayer([cp.Variable(T), cp.Variable(T)], [cp.Parameter(T,), cp.Parameter(1), cp.Parameter(1)],
+                              obj, [ineq1, ineq2, ineq3, ineq4, ineq5, ineq6], [], solver = "GUROBI", verbose=False)
     
-    # def forward(self, price):
-    #     return self.layer(price, self.c1.expand(price.shape[0], *self.c1.shape),
-    #                       self.c2.expand(price.shape[0], *self.c2.shape),
-    #                       self.P.expand(price.shape[0], *self.P.shape),
-    #                       self.E1.expand(price.shape[0], *self.E1.shape),
-    #                       self.E2.expand(price.shape[0], *self.E2.shape),
-    #                       self.e0.expand(price.shape[0], *self.e0.shape),
-    #                       self.eta.expand(price.shape[0], *self.eta.shape))
+    def forward(self, price):
+        return self.layer(price, self.c1.expand(price.shape[0], *self.c1.shape),
+                          self.c2.expand(price.shape[0], *self.c2.shape),
+)
 
 def data_generator(c1_value, c2_value, upperbound_p, lowerbound_p, upperbound_e, lowerbound_e, initial_e, efficiency, price_hist, N=1, T=288):
     # Generate data from the following optimization problem
