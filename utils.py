@@ -113,10 +113,10 @@ class PolytopeProjection(nn.Module):
     def __init__(self, P1, P2, T):
         super().__init__()
         self.c1 = nn.Parameter(20 * torch.ones(1))
-        self.c2 = nn.Parameter(120 * torch.ones(1))
-        self.E1 = nn.Parameter(0.5 * torch.ones(1))
-        self.E2 = nn.Parameter(-0.5 * torch.ones(1))
-        self.eta = nn.Parameter(0.9 * torch.ones(1))
+        self.c2 = nn.Parameter(110 * torch.ones(1))
+        self.E1 = nn.Parameter(0.8 * torch.ones(1))
+        self.E2 = nn.Parameter(-0.8 * torch.ones(1))
+        self.eta = nn.Parameter(0.8 * torch.ones(1))
 
         obj = (
             lambda d, p, price, c1, c2, E1, E2, eta: -price @ (d - p)
