@@ -6,17 +6,24 @@ import numpy as np
 import pandas as pd
 from utils import PolytopeProjection
 
+var = 0.01
 use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
 df_price = np.load("df_price.npy")
 df_dp = np.load("df_dp.npz")
-P1 = df_dp["p"].max()
-P2 = df_dp["d"].max()
+## add noise to data
+noise_d = np.random.normal(0, var, df_dp["d"].shape)
+noise_p = np.random.normal(0, var, df_dp["p"].shape)
+d = np.clip(df_dp["d"] + noise_d, 0, 0.5 / 12)
+p = np.clip(df_dp["p"] + noise_p, 0, 0.5 / 12)
+
+P1 = p.max()
+P2 = d.max()
 
 price_tensor = torch.from_numpy(df_price)
-d_tensor = torch.from_numpy(df_dp["d"])
-p_tensor = torch.from_numpy(df_dp["p"])
+d_tensor = torch.from_numpy(d)
+p_tensor = torch.from_numpy(p)
 y_tensor = tuple([d_tensor, p_tensor])
 
 torch.manual_seed(0)
@@ -61,4 +68,4 @@ for ite in range(1000):
         layer.eta.detach().numpy()[0],
     ]
 
-df.to_csv("converge_test.csv")
+df.to_csv("converge_test_" + str(var) + "_clip.csv")
