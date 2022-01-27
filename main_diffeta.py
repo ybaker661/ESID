@@ -4,7 +4,7 @@ import torch.optim as optim
 import torch.autograd as autograd
 import numpy as np
 import pandas as pd
-from utils import PolytopeProjection
+from utils import PolytopeProjectionDiff
 
 bias = 0
 var = 0
@@ -13,29 +13,23 @@ device = torch.device("cuda" if use_cuda else "cpu")
 
 df_price = np.load("df_price.npy")
 df_dp = np.load("df_dp.npz")
-## add noise to data
-noise_d = np.random.normal(bias, var, df_dp["d"].shape)
-noise_p = np.random.normal(bias, var, df_dp["p"].shape)
-d = np.clip(df_dp["d"] + noise_d, 0, 0.5 / 12)
-p = np.clip(df_dp["p"] + noise_p, 0, 0.5 / 12)
-
-P1 = p.max()
-P2 = d.max()
+P1 = df_dp["p"].max()
+P2 = df_dp["d"].max()
 
 price_tensor = torch.from_numpy(df_price)
-d_tensor = torch.from_numpy(d)
-p_tensor = torch.from_numpy(p)
+d_tensor = torch.from_numpy(df_dp["d"])
+p_tensor = torch.from_numpy(df_dp["p"])
 y_tensor = tuple([d_tensor, p_tensor])
 
 torch.manual_seed(0)
-layer = PolytopeProjection(P1, P2, T=288)
-opt1 = optim.Adam(layer.parameters(), lr=0.2)
+layer = PolytopeProjectionDiff(P1, P2, T=288)
+opt1 = optim.Adam(layer.parameters(), lr=5e-1)
 
-df = pd.DataFrame(columns=("loss", "c1", "c2", "E1", "E2", "eta"))
+df = pd.DataFrame(columns=("loss", "c1", "c2", "E1", "E2", "etad", "etap"))
 
-for ite in range(2000):
-    if ite == 1000:
-        opt1.param_groups[0]["lr"] = 1e-2
+for ite in range(1000):
+    if ite == 0:
+        opt1.param_groups[0]["lr"] = 1e-1
 
     dp_pred = layer(price_tensor)
 
@@ -43,16 +37,16 @@ for ite in range(2000):
     opt1.zero_grad()
     loss.backward()
     opt1.step()
+
     with torch.no_grad():
         i = 0
         for param in layer.parameters():
-            if i == 2:
-                param.clamp_(0, 100)
-            if i == 3:
-                param.clamp_(-100, 0)
             if i == 4:
                 param.clamp_(0.8, 1)
+            if i == 5:
+                param.clamp_(0.8, 1)
             i = i + 1
+
     # if(ite%10 == 0):
     print(ite)
     print("Loss", loss.detach())
@@ -61,10 +55,16 @@ for ite in range(2000):
     print("layer.E1.gradient =", layer.E1.grad, "E1 value =", layer.E1.detach().numpy())
     print("layer.E2.gradient =", layer.E2.grad, "E2 value =", layer.E2.detach().numpy())
     print(
-        "layer.eta.gradient =",
-        layer.eta.grad,
-        "eta value =",
-        layer.eta.detach().numpy(),
+        "layer.etad.gradient =",
+        layer.etad.grad,
+        "etad value =",
+        layer.etad.detach().numpy(),
+    )
+    print(
+        "layer.etap.gradient =",
+        layer.etap.grad,
+        "etap value =",
+        layer.etap.detach().numpy(),
     )
     df.loc[ite] = [
         loss.detach().numpy(),
@@ -72,7 +72,8 @@ for ite in range(2000):
         layer.c2.detach().numpy()[0],
         layer.E1.detach().numpy()[0],
         layer.E2.detach().numpy()[0],
-        layer.eta.detach().numpy()[0],
+        layer.etad.detach().numpy()[0],
+        layer.etap.detach().numpy()[0],
     ]
 
-df.to_csv("converge_test_var" + str(var) + "bias" + str(bias) + "_clip.csv")
+df.to_csv("converge_test_diffeta_pgd.csv")

@@ -112,8 +112,8 @@ class PolytopeProjection(nn.Module):
 
     def __init__(self, P1, P2, T):
         super().__init__()
-        self.c1 = nn.Parameter(20 * torch.ones(1))
-        self.c2 = nn.Parameter(110 * torch.ones(1))
+        self.c1 = nn.Parameter(0 * torch.ones(1))
+        self.c2 = nn.Parameter(0 * torch.ones(1))
         self.E1 = nn.Parameter(0.8 * torch.ones(1))
         self.E2 = nn.Parameter(-0.8 * torch.ones(1))
         self.eta = nn.Parameter(0.8 * torch.ones(1))
@@ -180,6 +180,92 @@ class PolytopeProjection(nn.Module):
             self.E1.expand(price.shape[0], *self.E1.shape),
             self.E2.expand(price.shape[0], *self.E2.shape),
             self.eta.expand(price.shape[0], *self.eta.shape),
+        )
+
+
+class PolytopeProjectionDiff(nn.Module):
+    """This function is only used in main_eta.py.
+    Using this layer, we train c1, c2, E1, E2, and eta, other parameters are infered from historical data."""
+
+    def __init__(self, P1, P2, T):
+        super().__init__()
+        self.c1 = nn.Parameter(20 * torch.ones(1))
+        self.c2 = nn.Parameter(110 * torch.ones(1))
+        self.E1 = nn.Parameter(0.8 * torch.ones(1))
+        self.E2 = nn.Parameter(-0.8 * torch.ones(1))
+        self.etad = nn.Parameter(0.8 * torch.ones(1))
+        self.etap = nn.Parameter(0.8 * torch.ones(1))
+
+        obj = (
+            lambda d, p, price, c1, c2, E1, E2, etad, etap: -price @ (d - p)
+            + c1 * cp.sum(d)
+            + cp.sum_squares(cp.sqrt(c2) * d)
+            if isinstance(d, cp.Variable)
+            else -price @ (d - p) + c1 * torch.sum(d) + c2 * torch.sum(d ** 2)
+        )
+
+        ineq1 = (
+            lambda d, p, price, c1, c2, E1, E2, etad, etap: p
+            - torch.ones(T, dtype=torch.double) * P1
+        )
+        ineq2 = (
+            lambda d, p, price, c1, c2, E1, E2, etad, etap: torch.ones(
+                T, dtype=torch.double
+            )
+            * 0
+            - p
+        )
+        ineq3 = (
+            lambda d, p, price, c1, c2, E1, E2, etad, etap: d
+            - torch.ones(T, dtype=torch.double) * P2
+        )
+        ineq4 = (
+            lambda d, p, price, c1, c2, E1, E2, etad, etap: torch.ones(
+                T, dtype=torch.double
+            )
+            * 0
+            - d
+        )
+        ineq5 = (
+            lambda d, p, price, c1, c2, E1, E2, etad, etap: torch.tril(
+                torch.ones(T, T, dtype=torch.double)
+            )
+            @ (etap * p - d / etad)
+            - torch.ones(T, dtype=torch.double) * E1
+        )
+        ineq6 = lambda d, p, price, c1, c2, E1, E2, etad, etap: torch.ones(
+            T, dtype=torch.double
+        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (
+            etap * p - d / etad
+        )
+
+        self.layer = OptLayer(
+            [cp.Variable(T), cp.Variable(T)],
+            [
+                cp.Parameter(T,),
+                cp.Parameter(1),
+                cp.Parameter(1),
+                cp.Parameter(1),
+                cp.Parameter(1),
+                cp.Parameter(1),
+                cp.Parameter(1),
+            ],
+            obj,
+            [ineq1, ineq2, ineq3, ineq4, ineq5, ineq6],
+            [],
+            solver="GUROBI",
+            verbose=False,
+        )
+
+    def forward(self, price):
+        return self.layer(
+            price,
+            self.c1.expand(price.shape[0], *self.c1.shape),
+            self.c2.expand(price.shape[0], *self.c2.shape),
+            self.E1.expand(price.shape[0], *self.E1.shape),
+            self.E2.expand(price.shape[0], *self.E2.shape),
+            self.etad.expand(price.shape[0], *self.etad.shape),
+            self.etap.expand(price.shape[0], *self.etap.shape),
         )
 
 
