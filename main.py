@@ -29,13 +29,13 @@ y_tensor = tuple([d_tensor, p_tensor])
 
 torch.manual_seed(0)
 layer = PolytopeProjection(P1, P2, T=288)
-opt1 = optim.Adam(layer.parameters(), lr=0.2)
+opt1 = optim.Adam(layer.parameters(), lr=1e-1)
 
 df = pd.DataFrame(columns=("loss", "c1", "c2", "E1", "E2", "eta"))
 
-for ite in range(2000):
-    if ite == 1000:
-        opt1.param_groups[0]["lr"] = 1e-2
+for ite in range(1000):
+    # if ite == 1000:
+    #     opt1.param_groups[0]["lr"] = 1e-2
 
     dp_pred = layer(price_tensor)
 
@@ -75,4 +75,4 @@ for ite in range(2000):
         layer.eta.detach().numpy()[0],
     ]
 
-df.to_csv("converge_test_var" + str(var) + "bias" + str(bias) + "_clip.csv")
+df.to_csv("converge_test_c2initial_90.csv")

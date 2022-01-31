@@ -277,8 +277,8 @@ class PolytopeProjectionETA(nn.Module):
 
     def __init__(self, P1, P2, E1, E2, eta, T):
         super().__init__()
-        self.c1 = nn.Parameter(10 * torch.ones(1))
-        self.c2 = nn.Parameter(100 * torch.ones(1))
+        self.c1 = nn.Parameter(0 * torch.ones(1))
+        self.c2 = nn.Parameter(0 * torch.ones(1))
 
         obj = (
             lambda d, p, price, c1, c2: -price @ (d - p)
