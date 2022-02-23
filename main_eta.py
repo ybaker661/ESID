@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.autograd as autograd
 import numpy as np
+import pandas as pd
 from utils import PolytopeProjectionETA
 
 use_cuda = torch.cuda.is_available()
@@ -28,11 +29,13 @@ y_tensor = tuple([d_tensor, p_tensor])
 
 torch.manual_seed(0)
 layer = PolytopeProjectionETA(P1, P2, E1, E2, eta, T=288)
-opt1 = optim.Adam(layer.parameters(), lr=5e-1)
+opt1 = optim.Adam(layer.parameters(), lr=1e-1)
 
-for ite in range(2000):
-    if ite == 0:
-        opt1.param_groups[0]["lr"] = 1e-1
+df = pd.DataFrame(columns=("loss", "c1", "c2"))
+
+for ite in range(1000):
+    # if ite == 0:
+    #     opt1.param_groups[0]["lr"] = 1e-1
 
     dp_pred = layer(price_tensor)
 
@@ -51,4 +54,10 @@ for ite in range(2000):
     print("E1 value =", E1)
     print("E2 value =", E2)
     print("eta value =", eta)
+    df.loc[ite] = [
+        loss.detach().numpy(),
+        layer.c1.detach().numpy()[0],
+        layer.c2.detach().numpy()[0],
+    ]
 
+# df.to_csv("converge_test_fixeta_c2initial_"+str(c2ini)+".csv")

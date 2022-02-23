@@ -100,7 +100,7 @@ class OptLayer(nn.Module):
                     0
                 ][:, 0]
             )
-
+# +torch.diag(torch.as_tensor(np.full(J[b].shape[0], 1e-10)))
             out.append(mat(y)[0])
         out = [torch.stack(o, dim=0) for o in zip(*out)]
         return out[0] if len(out) == 1 else tuple(out)
@@ -112,11 +112,12 @@ class PolytopeProjection(nn.Module):
 
     def __init__(self, P1, P2, T):
         super().__init__()
-        self.c1 = nn.Parameter(20 * torch.ones(1))
-        self.c2 = nn.Parameter(110 * torch.ones(1))
-        self.E1 = nn.Parameter(0.8 * torch.ones(1))
-        self.E2 = nn.Parameter(-0.8 * torch.ones(1))
-        self.eta = nn.Parameter(0.8 * torch.ones(1))
+        self.c1 = nn.Parameter(10 * torch.ones(1))
+        self.c2 = nn.Parameter(10 * torch.ones(1))
+        self.E1 = nn.Parameter(1 * torch.ones(1))
+        self.E2 = nn.Parameter(-1 * torch.ones(1))
+        self.eta = nn.Parameter(0.9 * torch.ones(1))
+        eps = 1e-5
 
         obj = (
             lambda d, p, price, c1, c2, E1, E2, eta: -price @ (d - p)
@@ -149,11 +150,13 @@ class PolytopeProjection(nn.Module):
                 torch.ones(T, T, dtype=torch.double)
             )
             @ (eta * p - d / eta)
+            - torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
             - torch.ones(T, dtype=torch.double) * E1
         )
         ineq6 = lambda d, p, price, c1, c2, E1, E2, eta: torch.ones(
             T, dtype=torch.double
-        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta)
+        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta) + torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
+
 
         self.layer = OptLayer(
             [cp.Variable(T), cp.Variable(T)],
@@ -193,6 +196,7 @@ class PolytopeProjectionETA(nn.Module):
         super().__init__()
         self.c1 = nn.Parameter(10 * torch.ones(1))
         self.c2 = nn.Parameter(100 * torch.ones(1))
+        eps = 1e-5
 
         obj = (
             lambda d, p, price, c1, c2: -price @ (d - p)
@@ -210,10 +214,11 @@ class PolytopeProjectionETA(nn.Module):
             lambda d, p, price, c1, c2: torch.tril(torch.ones(T, T, dtype=torch.double))
             @ (eta * p - d / eta)
             - torch.ones(T, dtype=torch.double) * E1
+            - torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
         )
         ineq6 = lambda d, p, price, c1, c2: torch.ones(
             T, dtype=torch.double
-        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta)
+        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta) + torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
 
         self.layer = OptLayer(
             [cp.Variable(T), cp.Variable(T)],
@@ -270,8 +275,11 @@ def data_generator(
     df_d = np.zeros((N, T))
     df_p = np.zeros((N, T))
     index = 0
-    for i in range(N):
-        price = np.array(price_hist.RTP[i * T : (i + 1) * T])
+    dates = np.random.choice(365,N,replace=False)
+    for i in dates:
+        price = np.array(price_hist.RTP[i * 288 : (i + 1) * 288])
+        price = np.mean(price.reshape(24,-1),axis=1)
+        # price = np.array(price_hist.DAP[i * 288 : (i + 1) * 288 : 12])
 
         c1 = c1_value
         c2 = c2_value
@@ -281,6 +289,7 @@ def data_generator(
         E2 = lowerbound_e
         e0 = initial_e
         eta = efficiency
+        # eps = leak
 
         # define the variable and objective function
         p = cp.Variable(T)
@@ -294,6 +303,8 @@ def data_generator(
             d >= np.ones(T,) * P2,
             np.tril(np.ones((T, T))) @ (eta * p - d / eta) <= np.ones(T,) * (E1 - e0),
             np.tril(np.ones((T, T))) @ (eta * p - d / eta) >= np.ones(T,) * (E2 - e0),
+            # np.tril(np.ones((T, T))) @ (eta * p - d / eta) - np.arange(eps, (T+1)*eps, eps) <= np.ones(T,) * (E1 - e0),
+            # np.tril(np.ones((T, T))) @ (eta * p - d / eta) - np.arange(eps, (T+1)*eps, eps) >= np.ones(T,) * (E2 - e0),
         ]
 
         cp.Problem(cp.Minimize(f), cons).solve(
@@ -312,6 +323,84 @@ def data_generator(
 
     return df_price, df_d, df_p
 
+def data_generator_val(
+    c1_value,
+    c2_value,
+    upperbound_p,
+    lowerbound_p,
+    upperbound_e,
+    lowerbound_e,
+    efficiency,
+    price_hist,
+    N=1,
+    T=288,
+):
+    """Generate data from the following optimization problem, some of the args could be writing in kwargs
+
+    Args:
+        c1_value (float): linear discharge cost
+        c2_value (float): quadratic discharge cost
+        upperbound_p (float): power upper bound
+        lowerbound_p (float): power lower bound
+        upperbound_e (float): energy upper bound
+        lowerbound_e (float): energy lower bound
+        initial_e (float): inital energy level
+        efficiency (float): energy storage efficiency
+        price_hist (Dataframe): real-time price
+        N (int, optional):  Defaults to 1.
+        T (int, optional): Defaults to 288.
+
+    Returns:
+        [dataframes]: dataframes of price, discharge and charge
+    """
+    #
+
+    df_d = np.zeros((N, T))
+    df_p = np.zeros((N, T))
+    index = 0
+    dates = np.random.choice(365,N,replace=False)
+    for i in range(N):
+        price = price_hist[i]
+
+        # price = np.array(price_hist.DAP[i * 288 : (i + 1) * 288 : 12])
+
+        c1 = c1_value
+        c2 = c2_value
+        P1 = upperbound_p
+        P2 = lowerbound_p
+        E1 = upperbound_e
+        E2 = lowerbound_e
+        eta = efficiency
+        # eps = leak
+
+        # define the variable and objective function
+        p = cp.Variable(T)
+        d = cp.Variable(T)
+        f = -price @ (d - p) + c1 * cp.sum(d) + c2 * cp.sum_squares(d)
+        # define constraints
+        cons = [
+            p <= np.ones(T,) * P1,
+            p >= np.ones(T,) * P2,
+            d <= np.ones(T,) * P1,
+            d >= np.ones(T,) * P2,
+            np.tril(np.ones((T, T))) @ (eta * p - d / eta) <= np.ones(T,) * E1 ,
+            np.tril(np.ones((T, T))) @ (eta * p - d / eta) >= np.ones(T,) * E2 ,
+        ]
+
+        cp.Problem(cp.Minimize(f), cons).solve(
+            solver="GUROBI",
+            verbose=False,
+            eps_abs=1e-6,
+            eps_rel=1e-6,
+            max_iter=1000000000,
+        )
+
+        df_d[index, :] = d.value
+        df_p[index, :] = p.value
+
+        index = index + 1
+
+    return df_d, df_p
 
 # def get_batch(X,Y,M):
 #     N = len(Y)
