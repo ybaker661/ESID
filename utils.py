@@ -1,4 +1,5 @@
 import torch
+from functorch import jacrev, grad
 import torch.nn as nn
 import torch.autograd as autograd
 import torch.optim as optim
@@ -7,6 +8,10 @@ from itertools import accumulate
 import cvxpy as cp
 import gurobipy
 import numpy as np
+import time
+
+
+
 
 
 class OptLayer(nn.Module):
@@ -24,7 +29,6 @@ class OptLayer(nn.Module):
         self.inequalities = inequalities
         self.equalities = equalities
         self.cvxpy_opts = cvxpy_opts
-
         # create the cvxpy problem with objective, inequalities, equalities
         self.cp_inequalities = [
             ineq(*variables, *parameters) <= 0 for ineq in inequalities
@@ -40,10 +44,12 @@ class OptLayer(nn.Module):
         # solve over minibatch by just iterating
         for batch in range(batch_params[0].shape[0]):
             # solve the optimization problem and extract solution + dual variables
+            # print(self.cp_inequalities + self.cp_equalities)
             params = [p[batch] for p in batch_params]
             with torch.no_grad():
                 for i, p in enumerate(self.parameters):
                     p.value = params[i].double().numpy()
+                print
                 self.problem.solve(**self.cvxpy_opts)
                 z = [torch.tensor(v.value).type_as(params[0]) for v in self.variables]
                 lam = [
@@ -54,11 +60,10 @@ class OptLayer(nn.Module):
                     torch.tensor(c.dual_value).type_as(params[0])
                     for c in self.cp_equalities
                 ]
-
+                
             # convenience routines to "flatten" and "unflatten" (z,lam,nu)
             def vec(z, lam, nu):
                 return torch.cat([a.view(-1) for b in [z, lam, nu] for a in b])
-
             def mat(x):
                 sz = [0] + list(
                     accumulate([a.numel() for b in [z, lam, nu] for a in b])
@@ -72,19 +77,36 @@ class OptLayer(nn.Module):
 
             # computes the KKT residual
             def kkt(z, lam, nu, *params):
+                
                 g = [ineq(*z, *params) for ineq in self.inequalities]
+                
+                # print(g[0].type())
+                t = time.time()
                 dnu = [eq(*z, *params) for eq in self.equalities]
+                # print("lagrang. partial w.r. to eq dual: " + str(time.time() - t) + " s")
                 L = (
                     self.objective(*z, *params)
                     + sum((u * v).sum() for u, v in zip(lam, g))
                     + sum((u * v).sum() for u, v in zip(nu, dnu))
                 )
+
+
+                tz = time.time()
                 dz = autograd.grad(L, z, create_graph=True)
+                # print("lagrang. partial w.r. to primal: " + str(time.time() - tz) + " s")
+
+                tg = time.time()
                 dlam = [lam[i] * g[i] for i in range(len(lam))]
+                # print("lagrang. partial w.r. to dual ineq: " + str(time.time() - tg) + " s")
+                
                 return dz, dlam, dnu
 
-            # compute residuals and re-engage autograd tape
+
             y = vec(z, lam, nu)
+            # print("dim of primal: " + str(len(z)) + " by " + str(z[0].size()))
+
+            # print("dim of dual ineq: " + str(len(lam)) + " by " + str(lam[0].size()))
+            # print("y update:")
             y = y - vec(
                 *kkt(
                     [z_.clone().detach().requires_grad_() for z_ in z], lam, nu, *params
@@ -92,14 +114,27 @@ class OptLayer(nn.Module):
             )
 
             # compute jacobian and backward hook
-            J.append(
-                autograd.functional.jacobian(lambda x: vec(*kkt(*mat(x), *params)), y)
-            )
+            # print("Jacobian: ")
+            t = time.time()
+            # J.append(
+            #     autograd.functional.jacobian(lambda x: vec(*kkt(*mat(x), *params)), y)
+            # )
+            tjac = time.time()
+            currjac = jacrev(lambda x: vec(*kkt(*mat(x), *params)))(y)
+            # print("jacobian (inc. kkt residuals): " + str(time.time() - tjac) + " s")
+            # print("time to compute jacobian: " + str(time.time()-t) + "s econds")
+            reg = torch.eye(n = currjac.shape[0], m = currjac.shape[1])
+            J.append(currjac)
+            
+            # t = time.time()
+
             y.register_hook(
-                lambda grad, b=batch: torch.solve(grad[:, None], J[b].transpose(0, 1))[
+                lambda grad, b=batch: torch.solve(grad[:, None], J[b].transpose(0, 1) + reg*10e-5)[
                     0
                 ][:, 0]
             )
+            
+
 # +torch.diag(torch.as_tensor(np.full(J[b].shape[0], 1e-10)))
             out.append(mat(y)[0])
         out = [torch.stack(o, dim=0) for o in zip(*out)]
@@ -110,15 +145,23 @@ class PolytopeProjection(nn.Module):
     """This function is only used in main_eta.py.
     Using this layer, we train c1, c2, E1, E2, and eta, other parameters are infered from historical data."""
 
-    def __init__(self, P1, P2, T):
+    def __init__(self, P1, P2, T, vals=False):
         super().__init__()
-        self.c1 = nn.Parameter(10 * torch.ones(1))
-        self.c2 = nn.Parameter(10 * torch.ones(1))
-        self.E1 = nn.Parameter(1 * torch.ones(1))
-        self.E2 = nn.Parameter(-1 * torch.ones(1))
-        self.eta = nn.Parameter(0.9 * torch.ones(1))
-        eps = 1e-5
-
+        if not vals:
+            self.c1 = nn.Parameter(10 * torch.ones(1))
+            self.c2 = nn.Parameter(10 * torch.ones(1))
+            self.E1 = nn.Parameter(1 * torch.ones(1))
+            self.E2 = nn.Parameter(-1 * torch.ones(1))
+            self.eta = nn.Parameter(0.9 * torch.ones(1))
+            eps = 1e-5
+        else:
+            self.c1 = nn.Parameter(vals[0] * torch.ones(1))
+            self.c2 = nn.Parameter(vals[1] * torch.ones(1))
+            self.E1 = nn.Parameter(vals[2] * torch.ones(1))
+            self.E2 = nn.Parameter(vals[3] * torch.ones(1))
+            self.eta = nn.Parameter(vals[4] * torch.ones(1))
+            eps = 1e-5
+        
         obj = (
             lambda d, p, price, c1, c2, E1, E2, eta: -price @ (d - p)
             + c1 * cp.sum(d)
@@ -186,16 +229,16 @@ class PolytopeProjection(nn.Module):
         )
 
 
-class PolytopeProjectionETA(nn.Module):
+class PolytopeProjectionc1(nn.Module):
     """This function is only used in main_eta.py.
     Using this layer, we only train c1 and c2, other parameters are infered from historical data.
     
     """
 
-    def __init__(self, P1, P2, E1, E2, eta, T):
+    def __init__(self, c1, P1, P2, eta, T):
         super().__init__()
-        self.c1 = nn.Parameter(10 * torch.ones(1))
-        self.c2 = nn.Parameter(100 * torch.ones(1))
+        self.c1 = nn.Parameter(c1 * torch.ones(1))
+        self.c2 = nn.Parameter(0 * torch.ones(1))
         eps = 1e-5
 
         obj = (
@@ -213,12 +256,12 @@ class PolytopeProjectionETA(nn.Module):
         ineq5 = (
             lambda d, p, price, c1, c2: torch.tril(torch.ones(T, T, dtype=torch.double))
             @ (eta * p - d / eta)
-            - torch.ones(T, dtype=torch.double) * E1
+            - torch.ones(T, dtype=torch.double) * 1
             - torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
         )
         ineq6 = lambda d, p, price, c1, c2: torch.ones(
             T, dtype=torch.double
-        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta) + torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
+        ) * 0 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta) + torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
 
         self.layer = OptLayer(
             [cp.Variable(T), cp.Variable(T)],
@@ -227,7 +270,7 @@ class PolytopeProjectionETA(nn.Module):
             [ineq1, ineq2, ineq3, ineq4, ineq5, ineq6],
             [],
             solver="GUROBI",
-            verbose=False,
+            verbose=True,
         )
 
     def forward(self, price):
@@ -237,6 +280,55 @@ class PolytopeProjectionETA(nn.Module):
             self.c2.expand(price.shape[0], *self.c2.shape),
         )
 
+class PolytopeProjectionETA(nn.Module):
+    """This function is only used in main_eta.py.
+    Using this layer, we only train c1 and c2, other parameters are infered from historical data.
+    
+    """
+
+    def __init__(self, c1, P1, P2, E1, E2, eta, T):
+        super().__init__()
+        self.c1 = nn.Parameter(c1 * torch.ones(1))
+        eps = 1e-5
+
+        obj = (
+            lambda d, p, price, c1, c2: -price @ (d - p)
+            + c1 * cp.sum(d)
+            + cp.sum_squares(0 * d)
+            if isinstance(d, cp.Variable)
+            else -price @ (d - p) + c1 * torch.sum(d) + 0 * torch.sum(d ** 2)
+        )
+
+        ineq1 = lambda d, p, price, c1: p - torch.ones(T, dtype=torch.double) * P1
+        ineq2 = lambda d, p, price, c1: torch.ones(T, dtype=torch.double) * 0 - p
+        ineq3 = lambda d, p, price, c1: d - torch.ones(T, dtype=torch.double) * P2
+        ineq4 = lambda d, p, price, c1: torch.ones(T, dtype=torch.double) * 0 - d
+        ineq5 = (
+            lambda d, p, price, c1: torch.tril(torch.ones(T, T, dtype=torch.double))
+            @ (eta * p - d / eta)
+            - torch.ones(T, dtype=torch.double) * E1
+            - torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
+        )
+        ineq6 = lambda d, p, price, c1: torch.ones(
+            T, dtype=torch.double
+        ) * E2 - torch.tril(torch.ones(T, T, dtype=torch.double)) @ (eta * p - d / eta) + torch.as_tensor(np.arange(eps, (T+1)*eps, eps))
+
+        self.layer = OptLayer(
+            [cp.Variable(T), cp.Variable(T)],
+            [cp.Parameter(T,), cp.Parameter(1)],
+            obj,
+            [ineq1, ineq2, ineq3, ineq4, ineq5, ineq6],
+            [],
+            solver="GUROBI",
+            verbose=True,
+        )
+
+    def forward(self, price):
+        return self.layer(
+            price,
+            self.c1.expand(price.shape[0], *self.c1.shape),
+            # self.c2.expand(price.shape[0], *self.c2.shape),
+        )
 
 def data_generator(
     c1_value,
@@ -309,7 +401,7 @@ def data_generator(
 
         cp.Problem(cp.Minimize(f), cons).solve(
             solver="GUROBI",
-            verbose=False,
+            verbose=True,
             eps_abs=1e-6,
             eps_rel=1e-6,
             max_iter=1000000000,

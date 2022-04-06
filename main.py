@@ -5,7 +5,7 @@ import torch.autograd as autograd
 import numpy as np
 import pandas as pd
 from utils import PolytopeProjection, data_generator_val
-
+import time
 N_train = 20
 N_valid = 10
 T=24
@@ -15,15 +15,18 @@ use_cuda = torch.cuda.is_available()
 device = torch.device("cuda" if use_cuda else "cpu")
 
 # df_price = np.load("df_price.npy")
-df_dp = np.load("data.npz")
+df_dp = np.load("Results/data1/data.npz")
+# df_dp = np.load("Results/data1/stochastic/data.npz")
+
 df_price = df_dp["price"]
 P1 = df_dp["p"].max()
 P2 = df_dp["d"].max()
 
-## add noise to data
+# add noise to data
 noise_d = np.random.normal(bias, var, df_dp["d"].shape)
 noise_p = np.random.normal(bias, var, df_dp["p"].shape)
 d = np.clip(df_dp["d"] + noise_d, 0, P2)
+print(d)
 p = np.clip(df_dp["p"] + noise_p, 0, P1)
 
 price_tensor = torch.from_numpy(df_price[0:N_train])
@@ -36,8 +39,8 @@ layer = PolytopeProjection(P1, P2, T)
 opt1 = optim.Adam(layer.parameters(), lr=1e-2)
 
 df = pd.DataFrame(columns=("loss", "c1", "c2", "E1", "E2", "eta"))
-
-for ite in range(500):
+tstart = time.time()
+for ite in range(200):
     dp_pred = layer(price_tensor)
 
     loss = nn.MSELoss()(y_tensor[0], dp_pred[0]) + nn.MSELoss()(y_tensor[1], dp_pred[1])
@@ -97,5 +100,6 @@ d_pred, p_pred = data_generator_val(
 y_pred = p_pred - d_pred
 mse = np.square(y_pred - y_valid).mean()
 print(mse)
-np.savez("result", mse = mse, d_valid = d_valid,  p_valid = p_valid, d_pred = d_pred, p_pred = p_pred, learning = df)
-
+# np.savez("result", mse = mse, d_valid = d_valid,  p_valid = p_valid, d_pred = d_pred, p_pred = p_pred, learning = df)
+tfin = time.time()
+print("total time to run 200 iterations w functorch jacobian: " + str((tfin-tstart)) + " seconds")
